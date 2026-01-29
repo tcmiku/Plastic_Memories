@@ -29,6 +29,7 @@ class SQLiteStorage:
             conn.executescript(MESSAGES_SQL)
             conn.executescript(MEMORY_SQL)
             conn.executescript(META_SQL)
+            log_event("db.migrate")
             self._try_enable_fts(conn)
         log_event("db.init")
 
@@ -114,6 +115,7 @@ class SQLiteStorage:
             if self._fts_enabled:
                 conn.execute("DELETE FROM fts_memory WHERE rowid=?", (mem_id,))
                 conn.execute("INSERT INTO fts_memory(rowid, content, user_id, persona_id) VALUES(?, ?, ?, ?)", (mem_id, data["content"], data["user_id"], data["persona_id"]))
+        log_event("memory.write", user_id=data["user_id"], persona_id=data["persona_id"])
         return updated, mem_id
 
     def _valid_memory_clause(self) -> str:
@@ -138,6 +140,7 @@ class SQLiteStorage:
                 )
                 rows = conn.execute(sql, (query, user_id, persona_id, now, limit)).fetchall()
             else:
+                log_event("fts.fallback", user_id=user_id, persona_id=persona_id)
                 like = f"%{query}%"
                 sql = "SELECT * FROM memory_items WHERE user_id=? AND persona_id=? AND content LIKE ? AND " + self._valid_memory_clause() + " LIMIT ?"
                 rows = conn.execute(sql, (user_id, persona_id, like, now, limit)).fetchall()
