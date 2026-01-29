@@ -1,4 +1,4 @@
-# Plastic Memories
+﻿# Plastic Memories
 
 跨应用、可扩展的 AI 人格与长期记忆系统。该项目提供稳定的人格与记忆中枢，可通过 HTTP/WS 插件被桌面宠物、CLI、IDE 插件、Web 应用等共享接入。
 
@@ -50,6 +50,8 @@ uvicorn plastic_memories.api:app --host 0.0.0.0 --port 8007
 存储与日志：
 - `PLASTIC_MEMORIES_DB_PATH`：数据库文件路径
 - `PLASTIC_MEMORIES_LOG_DIR`：日志目录
+- `PLASTIC_MEMORIES_LOG_LEVEL`：日志级别（默认 INFO）
+- `LOG_PATH`：日志文件完整路径（优先级高于目录）
 - `PLASTIC_MEMORIES_BUSY_TIMEOUT_MS`：SQLite busy_timeout（毫秒）
 
 召回与片段：
@@ -107,9 +109,11 @@ export PLASTIC_MEMORIES_EVENTS=none
 ## 日志与追踪
 
 日志为 JSON 结构化输出，包含以下字段：
-- `ts`：时间戳（秒）
+- `ts`：时间戳（ISO8601）
 - `level`：日志级别
 - `event`：事件名称
+- `logger`：记录器名称
+- `msg`：日志消息
 - `request_id`：请求追踪 ID（支持 `X-Request-Id`）
 - `user_id` / `persona_id`：业务上下文
 - `duration_ms`：耗时（如有）
@@ -117,16 +121,20 @@ export PLASTIC_MEMORIES_EVENTS=none
 
 关键事件示例：
 - `db.init`
+- `db.migrate`
 - `messages.append`
-- `judge.run`
-- `recall.run`
-- `sensitive.hit`
+- `memory.write`
+- `memory.recall`
+- `fts.fallback`
+- `api.request`
 - `api.error`
 
 ## 运行测试与覆盖率
 
 ```bash
+pytest -q
 pytest --cov=plastic_memories --cov-report=term-missing
+pytest -q tests/client_contract
 ```
 
 ## API 一览
@@ -153,6 +161,49 @@ pytest --cov=plastic_memories --cov-report=term-missing
 - `PERSONA_PROFILE`：人格画像（Markdown）
 - `PERSONA_MEMORY`：相关记忆条目
 - `CHAT_SNIPPETS`：近期聊天片段
+
+## 官方 Python SDK
+
+SDK 位置：`clients/python/plastic_memories_client`
+
+安装方式（仓库内使用）：
+
+```bash
+python -c "from clients.python.plastic_memories_client import PlasticMemoriesClient; print(PlasticMemoriesClient)"
+```
+
+最小示例（召回注入 + 追加 + 写入）：
+
+```python
+from clients.python.plastic_memories_client import PlasticMemoriesClient, Message
+
+client = PlasticMemoriesClient(base_url="http://127.0.0.1:8007", user_id="local", persona_id="default")
+
+recall = client.recall("请总结我喜欢的回答风格")
+print(recall.injection_block)
+
+client.append_messages([
+    Message(role="user", content="请用默认中文"),
+    Message(role="user", content="回答工程化"),
+])
+
+client.write([
+    Message(role="user", content="叫我 tcmiku"),
+])
+```
+
+与 tools_live2D 接入建议：
+1. 聊天前先 `recall()`，将 `injection_block` 注入系统提示。
+2. 聊天后将对话追加：`append_messages()`。
+3. 对需要长期保存的偏好再 `write()`。
+
+SDK 契约测试（无需启动服务）：
+
+```bash
+pytest -q tests/client_contract
+```
+
+示例脚本：`examples/client_sdk_demo.py`（真实 HTTP，需要先启动服务）。
 
 ## 扩展实现指南（建议）
 
