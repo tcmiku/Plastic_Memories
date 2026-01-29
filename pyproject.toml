@@ -1,0 +1,15 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plastic-memories"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+addopts = "-q -p no:pytestqt -p no:tmpdir"
+testpaths = ["tests"]

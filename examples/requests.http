@@ -1,0 +1,48 @@
+### 健康检查
+GET http://localhost:8007/health
+
+### 创建人格
+POST http://localhost:8007/persona/create
+Content-Type: application/json
+
+{
+  "user_id": "u1",
+  "persona_id": "default",
+  "display_name": "Ava",
+  "description": "Primary persona"
+}
+
+### 追加消息
+POST http://localhost:8007/messages/append
+Content-Type: application/json
+
+{
+  "user_id": "u1",
+  "persona_id": "default",
+  "session_id": "s1",
+  "source_app": "cli",
+  "role": "user",
+  "content": "Hello there"
+}
+
+### 写入记忆
+POST http://localhost:8007/memory/write
+Content-Type: application/json
+
+{
+  "user_id": "u1",
+  "persona_id": "default",
+  "type": "preferences",
+  "key": "tone",
+  "content": "Short, friendly responses"
+}
+
+### 召回
+POST http://localhost:8007/memory/recall
+Content-Type: application/json
+
+{
+  "user_id": "u1",
+  "persona_id": "default",
+  "query": "friendly"
+}
