@@ -11,5 +11,5 @@ version = "0.1.0"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
-addopts = "-q --disable-warnings --cov=plastic_memories --cov-report=term-missing --cov-fail-under=85 -p no:pytestqt -p no:tmpdir"
+addopts = "-q --disable-warnings --cov=plastic_memories --cov-report=term-missing --cov-fail-under=85 -p no:pytestqt --basetemp=.test_tmp/pytest"
 testpaths = ["tests"]

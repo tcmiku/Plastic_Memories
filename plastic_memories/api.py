@@ -1,4 +1,7 @@
-﻿from fastapi import FastAPI, HTTPException, Request
+﻿import json
+import time
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
 
@@ -6,8 +9,10 @@ from .config import get_settings
 from .context import set_request_context
 from .http import ok, fail
 from .logging import configure_logging, log_event
+from .templates import resolve_template_path, load_persona_template
 from .schemas import (
     PersonaCreateRequest,
+    PersonaCreateFromTemplateRequest,
     MessageAppendRequest,
     MessagePurgeRequest,
     MemoryWriteRequest,
@@ -15,7 +20,6 @@ from .schemas import (
     MemoryForgetRequest,
     MemoryRebuildRequest,
 )
-import time
 
 from .utils import gen_request_id, now_ts
 from .ext.registry import get_storage, get_recall_engine, get_judge, get_profile_builder, get_event_sink
@@ -43,8 +47,6 @@ async def request_id_middleware(request: Request, call_next):
         try:
             body = await request.body()
             if body:
-                import json
-
                 payload = json.loads(body.decode("utf-8"))
                 if isinstance(payload, dict):
                     user_id = user_id or payload.get("user_id")
@@ -171,6 +173,106 @@ def persona_create(payload: PersonaCreateRequest):
     storage = get_storage()
     storage.create_persona(payload.user_id, payload.persona_id, payload.display_name, payload.description)
     return ok({"status": "ok"})
+
+
+@app.post("/persona/create_from_template", response_model=None)
+def persona_create_from_template(payload: PersonaCreateFromTemplateRequest):
+    storage = get_storage()
+    try:
+        template_dir = resolve_template_path(payload.template_path)
+        seed = load_persona_template(template_dir)
+        log_event(
+            "persona.template.load",
+            user_id=payload.user_id,
+            persona_id=payload.persona_id,
+            template_path=payload.template_path,
+        )
+    except json.JSONDecodeError as exc:
+        log_event(
+            "persona.template.error",
+            user_id=payload.user_id,
+            persona_id=payload.persona_id,
+            template_path=payload.template_path,
+        )
+        return JSONResponse(
+            status_code=422,
+            content=fail("validation_error", "preferences.json 解析失败", details=str(exc)),
+        )
+    except Exception as exc:
+        log_event(
+            "persona.template.error",
+            user_id=payload.user_id,
+            persona_id=payload.persona_id,
+            template_path=payload.template_path,
+        )
+        raise HTTPException(status_code=400, detail={"reason": str(exc)})
+
+    storage.create_persona(payload.user_id, payload.persona_id, None, None)
+    existing = storage.list_memory(payload.user_id, payload.persona_id)
+    existing_keys = {(item.get("type"), item.get("mkey")) for item in existing}
+
+    to_write: list[dict] = []
+    persona_md = seed.persona_md or ""
+    rules_md = seed.rules_md or ""
+    preferences_json = seed.preferences_json or {}
+
+    def should_write(mtype: str, key: str) -> bool:
+        if payload.allow_overwrite:
+            return True
+        return (mtype, key) not in existing_keys
+
+    if should_write("persona", "persona_md"):
+        to_write.append({"type": "persona", "key": "persona_md", "content": persona_md})
+    if should_write("rule", "rules_md") and (payload.allow_overwrite or rules_md):
+        to_write.append({"type": "rule", "key": "rules_md", "content": rules_md})
+    if should_write("preferences", "preferences_json") and (payload.allow_overwrite or preferences_json):
+        to_write.append({"type": "preferences", "key": "preferences_json", "content": json.dumps(preferences_json, ensure_ascii=False)})
+
+    applied = bool(to_write)
+    skipped = not applied and not payload.allow_overwrite
+    overwritten = payload.allow_overwrite and applied
+
+    for item in to_write:
+        decision = get_judge().judge({
+            "user_id": payload.user_id,
+            "persona_id": payload.persona_id,
+            "content": item["content"],
+        })
+        if not decision["allow"]:
+            raise HTTPException(status_code=400, detail={"reason": decision["reason"]})
+        storage.write_memory({
+            "user_id": payload.user_id,
+            "persona_id": payload.persona_id,
+            "type": item["type"],
+            "key": item["key"],
+            "content": item["content"],
+            "tags": [],
+            "ttl_seconds": None,
+        })
+
+    event = "persona.template.apply"
+    if skipped:
+        event = "persona.template.skip"
+    log_event(
+        event,
+        user_id=payload.user_id,
+        persona_id=payload.persona_id,
+        template_path=payload.template_path,
+    )
+
+    return ok({
+        "user_id": payload.user_id,
+        "persona_id": payload.persona_id,
+        "template_path": payload.template_path,
+        "applied": applied,
+        "skipped": skipped,
+        "overwritten": overwritten,
+        "seed": {
+            "persona_md_len": len(persona_md),
+            "rules_md_len": len(rules_md),
+            "preferences_keys": list(preferences_json.keys()),
+        },
+    })
 
 
 @app.get("/persona/profile", response_model=None)

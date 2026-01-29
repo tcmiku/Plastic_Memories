@@ -10,6 +10,13 @@ class PersonaCreateRequest(BaseModel):
     description: Optional[str] = None
 
 
+class PersonaCreateFromTemplateRequest(BaseModel):
+    user_id: str
+    persona_id: str
+    template_path: str
+    allow_overwrite: bool = False
+
+
 class PersonaProfileResponse(BaseModel):
     user_id: str
     persona_id: str

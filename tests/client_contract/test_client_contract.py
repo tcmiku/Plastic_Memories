@@ -37,6 +37,22 @@ def test_persona_create_idempotent(client):
     client.persona_create(meta={"display_name": "Ava", "description": "Primary"})
 
 
+def test_create_from_template_contract(tmp_path, monkeypatch):
+    root = tmp_path / "personas" / "persona_x"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "persona.md").write_text("# Persona\n你好", encoding="utf-8")
+    (root / "rules.md").write_text("- 规则", encoding="utf-8")
+    (root / "preferences.json").write_text("{\"language\": \"zh\"}", encoding="utf-8")
+    monkeypatch.setenv("PLASTIC_MEMORIES_TEMPLATE_ROOT", str(tmp_path / "personas"))
+    import plastic_memories.config as config
+    config._settings = None
+
+    transport = ASGITransport(app=app)
+    sdk = PlasticMemoriesClient(base_url="http://test", user_id="u1", persona_id="persona_x", transport=transport)
+    data = sdk.create_from_template("personas/persona_x", allow_overwrite=False)
+    assert data["applied"] is True
+
+
 def test_write_and_recall_injection_block(client):
     client.append_messages([
         Message(role="user", content="请用默认中文"),

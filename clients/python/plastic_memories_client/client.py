@@ -156,6 +156,16 @@ class PlasticMemoriesClient:
         data, _ = self._request("POST", "/persona/create", json_body=payload)
         return data
 
+    def create_from_template(self, template_path: str, allow_overwrite: bool = False) -> dict:
+        payload = {
+            "user_id": self.user_id,
+            "persona_id": self.persona_id,
+            "template_path": template_path,
+            "allow_overwrite": allow_overwrite,
+        }
+        data, _ = self._request("POST", "/persona/create_from_template", json_body=payload)
+        return data
+
     def persona_profile(self, disable_retry: bool = False) -> dict:
         data, _ = self._request(
             "GET",

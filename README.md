@@ -53,6 +53,7 @@ uvicorn plastic_memories.api:app --host 0.0.0.0 --port 8007
 - `PLASTIC_MEMORIES_LOG_LEVEL`：日志级别（默认 INFO）
 - `LOG_PATH`：日志文件完整路径（优先级高于目录）
 - `PLASTIC_MEMORIES_BUSY_TIMEOUT_MS`：SQLite busy_timeout（毫秒）
+- `PLASTIC_MEMORIES_TEMPLATE_ROOT`：人格模板根目录（默认 `<repo_root>/personas`）
 
 召回与片段：
 - `PLASTIC_MEMORIES_SNIPPET_DAYS`：聊天片段天数（默认 7）
@@ -143,6 +144,7 @@ pytest -q tests/client_contract
 - `GET /capabilities`
 - `GET /metrics`
 - `POST /persona/create`
+- `POST /persona/create_from_template`
 - `GET /persona/profile`
 - `POST /messages/append`
 - `GET /messages/recent`
@@ -196,6 +198,7 @@ client.write([
 1. 聊天前先 `recall()`，将 `injection_block` 注入系统提示。
 2. 聊天后将对话追加：`append_messages()`。
 3. 对需要长期保存的偏好再 `write()`。
+4. 如果需要初始化人格模板，可调用 `create_from_template()`。
 
 SDK 契约测试（无需启动服务）：
 

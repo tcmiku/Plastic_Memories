@@ -35,6 +35,12 @@ client.write([
 ])
 ```
 
+从模板创建人格示例：
+
+```python
+client.create_from_template("personas/persona_1", allow_overwrite=False)
+```
+
 ## 与 tools_live2D 接入建议
 
 推荐流程：

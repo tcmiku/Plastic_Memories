@@ -1,0 +1,12 @@
+{
+  "language": "zh-CN",
+  "tone": "calm",
+  "style": "engineering",
+  "verbosity": 2,
+  "use_emojis": false,
+  "prefer_structure": true,
+  "default_output": {
+    "format": "markdown",
+    "sections": true
+  }
+}

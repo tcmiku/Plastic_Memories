@@ -23,10 +23,19 @@ def _default_log_dir() -> Path:
     return Path.home() / ".plastic_memories" / "logs"
 
 
+def _default_template_root() -> Path:
+    env = os.getenv("PLASTIC_MEMORIES_TEMPLATE_ROOT")
+    if env:
+        return Path(env).expanduser()
+    repo_root = Path(__file__).resolve().parents[1]
+    return repo_root / "personas"
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path = field(default_factory=_default_db_path)
     log_dir: Path = field(default_factory=_default_log_dir)
+    template_root: Path = field(default_factory=_default_template_root)
     backend: str = field(default_factory=lambda: os.getenv("PLASTIC_MEMORIES_BACKEND", "sqlite"))
     recall: str = field(default_factory=lambda: os.getenv("PLASTIC_MEMORIES_RECALL", "keyword"))
     judge: str = field(default_factory=lambda: os.getenv("PLASTIC_MEMORIES_JUDGE", "rules"))
