@@ -107,6 +107,22 @@ export PLASTIC_MEMORIES_EVENTS=none
 - Windows：`%APPDATA%/PlasticMemories/logs`
 - 可用 `PLASTIC_MEMORIES_LOG_DIR` 覆盖
 
+## 数据库迁移（服务器迁移参考）
+
+1. **确认数据库文件位置**  
+   - 默认路径见上文，或检查是否设置了 `PLASTIC_MEMORIES_DB_PATH`。  
+2. **停服务后复制数据库文件**  
+   - 建议先停止服务，复制 `plastic_memories.db`（如需也可同步日志目录）。  
+3. **新服务器恢复**  
+   - 将数据库文件放到目标路径（默认或 `PLASTIC_MEMORIES_DB_PATH` 指定位置）。  
+4. **启动并验证**  
+   - 启动服务后请求 `GET /health`，确认 `db_path` 指向期望路径。  
+
+常见注意事项：  
+- 若跨平台迁移（Windows → Linux/反之），确保路径格式正确且有读写权限。  
+- SQLite 为单文件，迁移时务必保证源端不在写入（避免损坏）。  
+- 如有自定义 `PLASTIC_MEMORIES_TEMPLATE_ROOT`，也可一并迁移模板目录。
+
 ## 日志与追踪
 
 日志为 JSON 结构化输出，包含以下字段：
