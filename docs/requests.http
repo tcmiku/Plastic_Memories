@@ -1,0 +1,196 @@
+# NOTE:
+# - Start the Plastic_Memories service locally before running requests.
+# - Ensure PLASTIC_MEMORIES_API_KEYS includes the apiKey below.
+
+@baseUrl = http://127.0.0.1:8000
+@apiKey = devkey
+@personaId = demo_persona
+
+### E1: memory/write (slot type -> candidate)
+# Expected: ok=true, data.memory_status=candidate, returns memory_id
+POST {{baseUrl}}/memory/write
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "type": "identity",
+  "key": "id1",
+  "content": "I am a developer",
+  "source_type": "user_explicit"
+}
+
+### E2: memory/confirm (no conflict -> active + slot update)
+# Expected: ok=true, data.memory_status=active
+# NOTE: replace 0 with the memory_id from the previous response
+POST {{baseUrl}}/memory/confirm
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "memory_id": 0
+}
+
+### E3: conflict confirm (no supersedes_id -> 409 conflict_requires_supersedes)
+# Step 1: write preferences A (candidate)
+POST {{baseUrl}}/memory/write
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "type": "preferences",
+  "key": "pref-a",
+  "content": "A",
+  "source_type": "user_explicit"
+}
+
+### Step 2: confirm A (active)
+# NOTE: replace 0 with the memory_id from the previous response
+POST {{baseUrl}}/memory/confirm
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "memory_id": 0
+}
+
+### Step 3: write preferences B (candidate)
+POST {{baseUrl}}/memory/write
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "type": "preferences",
+  "key": "pref-b",
+  "content": "B",
+  "source_type": "user_explicit"
+}
+
+### Step 4: confirm B without supersedes_id -> conflict
+# Expected: HTTP 409, error.code=conflict_requires_supersedes
+# NOTE: replace 0 with the memory_id from the previous response
+POST {{baseUrl}}/memory/confirm
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "memory_id": 0
+}
+
+### E4: supersedes coverage (with supersedes_id)
+# Expected: A -> revoked, B -> active, slots.preferences == "B"
+# NOTE: replace 0 with the ids from previous responses
+POST {{baseUrl}}/memory/confirm
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "memory_id": 0,
+  "supersedes_id": 0
+}
+
+### E5: revoke vs forget
+# Revoke: soft revoke, still exists but not recalled/listed
+# NOTE: replace 0 with the memory_id to revoke
+POST {{baseUrl}}/memory/revoke
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "memory_id": 0
+}
+
+### Forget: hard delete + remove from FTS
+POST {{baseUrl}}/memory/forget
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "type": "preferences",
+  "key": "pref-b"
+}
+
+### E6: persona/slots/get
+# Expected: identity/preferences slots reflect latest active memory
+POST {{baseUrl}}/persona/slots/get
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}"
+}
+
+### E7: goals flow
+# Create goal
+POST {{baseUrl}}/goals/create
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "title": "Learn Rust",
+  "details": "practice"
+}
+
+### List goals
+GET {{baseUrl}}/goals/list?persona_id={{personaId}}
+X-API-Key: {{apiKey}}
+
+### Update goal status
+# NOTE: replace 0 with the goal_id from the create response
+POST {{baseUrl}}/goals/update_status
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "goal_id": 0,
+  "status": "done"
+}
+
+### Link goal
+# NOTE: replace 0 with the goal_id from the create response
+POST {{baseUrl}}/goals/link
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "goal_id": 0,
+  "memory_id": null,
+  "note": "start"
+}
+
+### E8: error examples
+# 401: missing X-API-Key (body is valid)
+POST {{baseUrl}}/memory/write
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}",
+  "type": "identity",
+  "key": "id401",
+  "content": "I am a developer",
+  "source_type": "user_explicit"
+}
+
+### 422: missing required fields (with X-API-Key)
+POST {{baseUrl}}/memory/write
+X-API-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "persona_id": "{{personaId}}"
+}
+
+### Usage Tips
+# - VS Code: REST Client extension
+# - JetBrains: HTTP Client

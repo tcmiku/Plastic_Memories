@@ -6,7 +6,7 @@ class JudgeContract:
     def test_sensitive_denied(self):
         judge = RuleBasedJudge(StrictDenyPolicy())
         result = judge.judge({"content": "my password is 123"})
-        assert result["allow"] is False
+        assert result["decision"] == "deny"
 
 
 class TestJudgeContract(JudgeContract):

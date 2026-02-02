@@ -21,7 +21,7 @@ from plastic_memories_client.errors import PlasticMemoriesError
 @pytest.fixture
 def client():
     transport = ASGITransport(app=app)
-    return PlasticMemoriesClient(base_url="http://test", user_id="u1", persona_id="default", transport=transport)
+    return PlasticMemoriesClient(base_url="http://test", user_id="u1", persona_id="default", api_key="testkey-a", transport=transport)
 
 
 def test_health_and_capabilities(client):
@@ -48,7 +48,7 @@ def test_create_from_template_contract(tmp_path, monkeypatch):
     config._settings = None
 
     transport = ASGITransport(app=app)
-    sdk = PlasticMemoriesClient(base_url="http://test", user_id="u1", persona_id="persona_x", transport=transport)
+    sdk = PlasticMemoriesClient(base_url="http://test", user_id="u1", persona_id="persona_x", api_key="testkey-a", transport=transport)
     data = sdk.create_from_template("personas/persona_x", allow_overwrite=False)
     assert data["applied"] is True
 
@@ -86,7 +86,7 @@ def test_full_flow_and_listing(client):
         item = listed["items"][0]
         client.forget_memory(match={"type": item.get("type"), "key": item.get("mkey")})
     client.purge_messages(older_than_days=1)
-    client._request("POST", "/memory/rebuild", json_body={"user_id": "u1", "persona_id": "default"})
+    client._request("POST", "/memory/rebuild", json_body={"persona_id": "default"})
 
 
 def test_fts_fallback_path(client):
@@ -104,7 +104,7 @@ def test_error_envelope_mapping(client):
 def test_http_error_mapping(client):
     with pytest.raises(PlasticMemoriesError) as exc:
         client.write([Message(role="user", content="my password is 123")])
-    assert exc.value.code == "http_error"
+    assert exc.value.code == "judge_deny"
 
 
 def test_index_page():

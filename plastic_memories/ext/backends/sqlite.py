@@ -5,7 +5,7 @@ from typing import Any
 from ...config import get_settings
 from ...db import ensure_db_dir
 from ...logging import log_event
-from ...migrations import PERSONAS_SQL, MESSAGES_SQL, MEMORY_SQL, META_SQL, FTS_MESSAGES_SQL, FTS_MEMORY_SQL
+from ...migrations import FTS_MESSAGES_SQL, FTS_MEMORY_SQL, migrate
 from ...utils import now_ts, dumps_json
 
 
@@ -25,10 +25,7 @@ class SQLiteStorage:
 
     def init(self) -> None:
         with self._connect() as conn:
-            conn.executescript(PERSONAS_SQL)
-            conn.executescript(MESSAGES_SQL)
-            conn.executescript(MEMORY_SQL)
-            conn.executescript(META_SQL)
+            migrate(conn)
             log_event("db.migrate")
             self._try_enable_fts(conn)
         log_event("db.init")
@@ -88,11 +85,23 @@ class SQLiteStorage:
         with self._connect() as conn:
             if before_ts is None:
                 return 0
+            if self._fts_enabled:
+                conn.execute(
+                    "DELETE FROM fts_messages WHERE rowid IN (SELECT id FROM messages WHERE user_id=? AND persona_id=? AND created_at < ?)",
+                    (user_id, persona_id, before_ts),
+                )
             cursor = conn.execute("DELETE FROM messages WHERE user_id=? AND persona_id=? AND created_at < ?", (user_id, persona_id, before_ts))
             return cursor.rowcount
 
     def write_memory(self, data: dict) -> tuple[bool, int]:
         now = now_ts()
+        status = data.get("status") or "active"
+        scope = data.get("scope") or "persona"
+        source_type = data.get("source_type") or "user_explicit"
+        source_ref = data.get("source_ref")
+        confidence = data.get("confidence")
+        expires_at = data.get("expires_at")
+        supersedes_id = data.get("supersedes_id")
         with self._connect() as conn:
             existing = conn.execute(
                 "SELECT id FROM memory_items WHERE user_id=? AND persona_id=? AND type=? AND mkey=?",
@@ -100,15 +109,45 @@ class SQLiteStorage:
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE memory_items SET content=?, tags_json=?, ttl_seconds=?, updated_at=? WHERE id=?",
-                    (data["content"], dumps_json(data.get("tags") or []), data.get("ttl_seconds"), now, existing["id"]),
+                    "UPDATE memory_items SET content=?, tags_json=?, ttl_seconds=?, status=?, scope=?, source_type=?, source_ref=?, confidence=?, expires_at=?, supersedes_id=?, updated_at=? WHERE id=?",
+                    (
+                        data["content"],
+                        dumps_json(data.get("tags") or []),
+                        data.get("ttl_seconds"),
+                        status,
+                        scope,
+                        source_type,
+                        source_ref,
+                        confidence,
+                        expires_at,
+                        supersedes_id,
+                        now,
+                        existing["id"],
+                    ),
                 )
                 mem_id = int(existing["id"])
                 updated = True
             else:
                 cursor = conn.execute(
-                    "INSERT INTO memory_items(user_id, persona_id, type, mkey, content, tags_json, ttl_seconds, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (data["user_id"], data["persona_id"], data["type"], data["key"], data["content"], dumps_json(data.get("tags") or []), data.get("ttl_seconds"), now, now),
+                    "INSERT INTO memory_items(user_id, persona_id, type, mkey, content, tags_json, ttl_seconds, status, scope, source_type, source_ref, confidence, expires_at, supersedes_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        data["user_id"],
+                        data["persona_id"],
+                        data["type"],
+                        data["key"],
+                        data["content"],
+                        dumps_json(data.get("tags") or []),
+                        data.get("ttl_seconds"),
+                        status,
+                        scope,
+                        source_type,
+                        source_ref,
+                        confidence,
+                        expires_at,
+                        supersedes_id,
+                        now,
+                        now,
+                    ),
                 )
                 mem_id = int(cursor.lastrowid)
                 updated = False
@@ -119,14 +158,18 @@ class SQLiteStorage:
         return updated, mem_id
 
     def _valid_memory_clause(self) -> str:
-        return "(ttl_seconds IS NULL OR created_at + ttl_seconds > ?)"
+        return (
+            "status='active' AND "
+            "(ttl_seconds IS NULL OR created_at + ttl_seconds > ?) AND "
+            "(expires_at IS NULL OR expires_at > ?)"
+        )
 
     def list_memory(self, user_id: str, persona_id: str) -> list[dict]:
         with self._connect() as conn:
             now = now_ts()
             rows = conn.execute(
                 f"SELECT * FROM memory_items WHERE user_id=? AND persona_id=? AND {self._valid_memory_clause()} ORDER BY updated_at DESC",
-                (user_id, persona_id, now),
+                (user_id, persona_id, now, now),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -138,18 +181,152 @@ class SQLiteStorage:
                     "SELECT m.* FROM fts_memory f JOIN memory_items m ON m.id=f.rowid "
                     "WHERE fts_memory MATCH ? AND m.user_id=? AND m.persona_id=? AND " + self._valid_memory_clause() + " LIMIT ?"
                 )
-                rows = conn.execute(sql, (query, user_id, persona_id, now, limit)).fetchall()
+                rows = conn.execute(sql, (query, user_id, persona_id, now, now, limit)).fetchall()
             else:
                 log_event("fts.fallback", user_id=user_id, persona_id=persona_id)
                 like = f"%{query}%"
                 sql = "SELECT * FROM memory_items WHERE user_id=? AND persona_id=? AND content LIKE ? AND " + self._valid_memory_clause() + " LIMIT ?"
-                rows = conn.execute(sql, (user_id, persona_id, like, now, limit)).fetchall()
+                rows = conn.execute(sql, (user_id, persona_id, like, now, now, limit)).fetchall()
             return [dict(row) for row in rows]
 
     def forget_memory(self, user_id: str, persona_id: str, mtype: str, key: str) -> int:
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM memory_items WHERE user_id=? AND persona_id=? AND type=? AND mkey=?",
+                (user_id, persona_id, mtype, key),
+            ).fetchone()
+            if row and self._fts_enabled:
+                conn.execute("DELETE FROM fts_memory WHERE rowid=?", (row["id"],))
             cursor = conn.execute("DELETE FROM memory_items WHERE user_id=? AND persona_id=? AND type=? AND mkey=?", (user_id, persona_id, mtype, key))
             return cursor.rowcount
+
+    def confirm_memory(self, user_id: str, persona_id: str, memory_id: int, supersedes_id: int | None = None) -> dict | None:
+        now = now_ts()
+        slot_types = {"identity", "constraints", "values", "preferences"}
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, status, type, supersedes_id FROM memory_items WHERE id=? AND user_id=? AND persona_id=?",
+                (memory_id, user_id, persona_id),
+            ).fetchone()
+            if not row:
+                return None
+            status = row["status"]
+            mtype = row["type"]
+            requested_supersedes = supersedes_id if supersedes_id is not None else row["supersedes_id"]
+            if mtype in slot_types:
+                active_row = conn.execute(
+                    "SELECT id FROM memory_items WHERE user_id=? AND persona_id=? AND type=? AND status='active' AND (expires_at IS NULL OR expires_at > ?) LIMIT 1",
+                    (user_id, persona_id, mtype, now),
+                ).fetchone()
+                if active_row and active_row["id"] != memory_id:
+                    if requested_supersedes is None:
+                        return {"error": "conflict_requires_supersedes"}
+                    if int(requested_supersedes) != int(active_row["id"]):
+                        return {"error": "conflict_requires_supersedes"}
+                if active_row is None and requested_supersedes is not None:
+                    return {"error": "conflict_requires_supersedes"}
+            if status != "candidate":
+                return {"updated": False, "status": status}
+            if mtype in slot_types and requested_supersedes is not None:
+                conn.execute(
+                    "UPDATE memory_items SET status='revoked', updated_at=? WHERE id=? AND user_id=? AND persona_id=?",
+                    (now, requested_supersedes, user_id, persona_id),
+                )
+            conn.execute(
+                "UPDATE memory_items SET status='active', supersedes_id=?, updated_at=? WHERE id=?",
+                (requested_supersedes, now, memory_id),
+            )
+            return {"updated": True, "status": "active", "supersedes_id": requested_supersedes}
+
+    def revoke_memory(self, user_id: str, persona_id: str, memory_id: int) -> dict | None:
+        now = now_ts()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM memory_items WHERE id=? AND user_id=? AND persona_id=?",
+                (memory_id, user_id, persona_id),
+            ).fetchone()
+            if not row:
+                return None
+            status = row["status"]
+            if status == "revoked":
+                return {"updated": False, "status": status}
+            conn.execute(
+                "UPDATE memory_items SET status='revoked', updated_at=? WHERE id=?",
+                (now, memory_id),
+            )
+            return {"updated": True, "status": "revoked"}
+
+    def get_memory_by_id(self, user_id: str, persona_id: str, memory_id: int) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memory_items WHERE id=? AND user_id=? AND persona_id=?",
+                (memory_id, user_id, persona_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_slots(self, user_id: str, persona_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM persona_slots WHERE user_id=? AND persona_id=? ORDER BY updated_at DESC",
+                (user_id, persona_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def set_slot(self, user_id: str, persona_id: str, slot_name: str, value_json: str, provenance_json: str | None) -> None:
+        now = now_ts()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO persona_slots(user_id, persona_id, slot_name, value_json, provenance_json, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, persona_id, slot_name) DO UPDATE SET
+                    value_json=excluded.value_json,
+                    provenance_json=excluded.provenance_json,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, persona_id, slot_name, value_json, provenance_json, now),
+            )
+
+    def create_goal(self, user_id: str, persona_id: str, title: str, details: str | None) -> int:
+        now = now_ts()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO goals(user_id, persona_id, title, details, status, created_at, updated_at) VALUES(?, ?, ?, ?, 'active', ?, ?)",
+                (user_id, persona_id, title, details, now, now),
+            )
+            return int(cursor.lastrowid)
+
+    def list_goals(self, user_id: str, persona_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM goals WHERE user_id=? AND persona_id=? ORDER BY updated_at DESC",
+                (user_id, persona_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def update_goal_status(self, user_id: str, persona_id: str, goal_id: int, status: str) -> int:
+        now = now_ts()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE goals SET status=?, updated_at=? WHERE id=? AND user_id=? AND persona_id=?",
+                (status, now, goal_id, user_id, persona_id),
+            )
+            return cursor.rowcount
+
+    def link_goal(self, user_id: str, persona_id: str, goal_id: int, memory_id: int | None, note: str | None) -> int | None:
+        now = now_ts()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM goals WHERE id=? AND user_id=? AND persona_id=?",
+                (goal_id, user_id, persona_id),
+            ).fetchone()
+            if not row:
+                return None
+            cursor = conn.execute(
+                "INSERT INTO goal_links(user_id, persona_id, goal_id, memory_id, note, created_at) VALUES(?, ?, ?, ?, ?, ?)",
+                (user_id, persona_id, goal_id, memory_id, note, now),
+            )
+            return int(cursor.lastrowid)
 
     def rebuild_fts(self, user_id: str, persona_id: str) -> None:
         if not self._fts_enabled:

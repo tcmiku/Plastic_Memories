@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from typing import Any, Optional
 
@@ -32,6 +33,7 @@ class PlasticMemoriesClient:
         default_headers: Optional[dict] = None,
         verify: bool | str | None = None,
         session_id: Optional[str] = None,
+        api_key: Optional[str] = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -39,7 +41,10 @@ class PlasticMemoriesClient:
         self.persona_id = persona_id
         self.source_app = source_app
         self.timeout_s = timeout_s
+        self.api_key = api_key or os.getenv("PLASTIC_MEMORIES_API_KEY")
         self.default_headers = default_headers or {}
+        if self.api_key and "X-API-Key" not in self.default_headers:
+            self.default_headers["X-API-Key"] = self.api_key
         self.verify = verify
         self.session_id = session_id or self.new_session_id()
         self._async_transport = _is_async_transport(transport)
@@ -77,6 +82,8 @@ class PlasticMemoriesClient:
         merged.update(self.default_headers)
         if headers:
             merged.update(headers)
+        if self.api_key and "X-API-Key" not in merged:
+            merged["X-API-Key"] = self.api_key
         if "X-Request-Id" not in merged:
             merged["X-Request-Id"] = uuid.uuid4().hex
         return merged
@@ -97,7 +104,7 @@ class PlasticMemoriesClient:
         raise PlasticMemoriesError(
             code=error.get("code", "http_error"),
             message=error.get("message", "请求失败"),
-            details=error.get("details"),
+            details=error.get("detail"),
             request_id=payload.get("request_id") or request_id,
             status_code=response.status_code,
         )
@@ -148,7 +155,7 @@ class PlasticMemoriesClient:
         return data
 
     def persona_create(self, meta: dict | None = None, seed: dict | None = None) -> dict:
-        payload = {"user_id": self.user_id, "persona_id": self.persona_id}
+        payload = {"persona_id": self.persona_id}
         if meta:
             payload.update(meta)
         if seed:
@@ -158,7 +165,6 @@ class PlasticMemoriesClient:
 
     def create_from_template(self, template_path: str, allow_overwrite: bool = False) -> dict:
         payload = {
-            "user_id": self.user_id,
             "persona_id": self.persona_id,
             "template_path": template_path,
             "allow_overwrite": allow_overwrite,
@@ -170,7 +176,7 @@ class PlasticMemoriesClient:
         data, _ = self._request(
             "GET",
             "/persona/profile",
-            params={"user_id": self.user_id, "persona_id": self.persona_id},
+            params={"persona_id": self.persona_id},
             retry=True,
             disable_retry=disable_retry,
         )
@@ -189,7 +195,6 @@ class PlasticMemoriesClient:
         disable_retry: bool = False,
     ) -> RecallResult:
         payload = {
-            "user_id": self.user_id,
             "persona_id": self.persona_id,
             "query": query,
             "limit": top_k or 10,
@@ -213,7 +218,6 @@ class PlasticMemoriesClient:
         message_ids = []
         for msg in messages:
             payload = {
-                "user_id": self.user_id,
                 "persona_id": self.persona_id,
                 "session_id": session,
                 "source_app": self.source_app,
@@ -231,7 +235,6 @@ class PlasticMemoriesClient:
         for msg in messages:
             key = _stable_key(msg.content)
             payload = {
-                "user_id": self.user_id,
                 "persona_id": self.persona_id,
                 "type": "preferences",
                 "key": key,
@@ -246,7 +249,7 @@ class PlasticMemoriesClient:
         data, _ = self._request(
             "GET",
             "/memory/list",
-            params={"user_id": self.user_id, "persona_id": self.persona_id},
+            params={"persona_id": self.persona_id},
             retry=True,
         )
         items = data.get("items", [])
@@ -258,7 +261,6 @@ class PlasticMemoriesClient:
         if match is None:
             raise ValueError("forget_memory 需要 match 参数（含 type/key）")
         payload = {
-            "user_id": self.user_id,
             "persona_id": self.persona_id,
             "type": match.get("type"),
             "key": match.get("key"),
@@ -268,7 +270,6 @@ class PlasticMemoriesClient:
 
     def purge_messages(self, older_than_days: int) -> dict:
         payload = {
-            "user_id": self.user_id,
             "persona_id": self.persona_id,
             "days": older_than_days,
         }

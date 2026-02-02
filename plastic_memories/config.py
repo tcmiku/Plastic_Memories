@@ -45,6 +45,7 @@ class Settings:
     message_snippet_days: int = field(default_factory=lambda: int(os.getenv("PLASTIC_MEMORIES_SNIPPET_DAYS", "7")))
     max_snippets: int = field(default_factory=lambda: int(os.getenv("PLASTIC_MEMORIES_SNIPPET_LIMIT", "20")))
     busy_timeout_ms: int = field(default_factory=lambda: int(os.getenv("PLASTIC_MEMORIES_BUSY_TIMEOUT_MS", "5000")))
+    profile_max_chars: int = field(default_factory=lambda: int(os.getenv("PLASTIC_MEMORIES_PROFILE_MAX_CHARS", "2000")))
 
 
 _settings = None

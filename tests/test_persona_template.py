@@ -6,6 +6,8 @@ from httpx import AsyncClient, ASGITransport
 
 from plastic_memories.api import app
 
+AUTH_HEADERS = {"X-API-Key": "testkey-a"}
+
 
 def _write_template(base: Path, name: str, *, invalid_prefs: bool = False):
     tdir = base / name
@@ -30,11 +32,10 @@ async def test_create_from_template_ok(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/persona/create_from_template", json={
-            "user_id": "local",
             "persona_id": "persona_x",
             "template_path": "personas/persona_x",
             "allow_overwrite": False
-        })
+        }, headers=AUTH_HEADERS)
         body = res.json()
         assert body["ok"] is True
         assert body["data"]["applied"] is True
@@ -52,17 +53,15 @@ async def test_create_from_template_idempotent_skip(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         await client.post("/persona/create_from_template", json={
-            "user_id": "local",
             "persona_id": "persona_x",
             "template_path": "personas/persona_x",
             "allow_overwrite": False
-        })
+        }, headers=AUTH_HEADERS)
         res = await client.post("/persona/create_from_template", json={
-            "user_id": "local",
             "persona_id": "persona_x",
             "template_path": "personas/persona_x",
             "allow_overwrite": False
-        })
+        }, headers=AUTH_HEADERS)
         body = res.json()
         assert body["ok"] is True
         assert body["data"]["skipped"] is True
@@ -79,11 +78,10 @@ async def test_create_from_template_overwrite(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/persona/create_from_template", json={
-            "user_id": "local",
             "persona_id": "persona_x",
             "template_path": "personas/persona_x",
             "allow_overwrite": True
-        })
+        }, headers=AUTH_HEADERS)
         body = res.json()
         assert body["ok"] is True
         assert body["data"]["overwritten"] is True
@@ -101,11 +99,10 @@ async def test_create_from_template_path_traversal(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/persona/create_from_template", json={
-            "user_id": "local",
             "persona_id": "persona_x",
             "template_path": "../secret",
             "allow_overwrite": False
-        })
+        }, headers=AUTH_HEADERS)
         body = res.json()
         assert body["ok"] is False
 
@@ -121,11 +118,10 @@ async def test_create_from_template_invalid_preferences(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/persona/create_from_template", json={
-            "user_id": "local",
             "persona_id": "persona_x",
             "template_path": "personas/persona_x",
             "allow_overwrite": False
-        })
+        }, headers=AUTH_HEADERS)
         body = res.json()
         assert body["ok"] is False
         assert body["error"]["code"] == "validation_error"

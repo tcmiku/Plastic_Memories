@@ -154,6 +154,13 @@ pytest --cov=plastic_memories --cov-report=term-missing
 pytest -q tests/client_contract
 ```
 
+### Windows + pytest-cov 临时目录说明
+
+为了避免 Windows 上 pytest-cov 在系统临时目录写入失败，本仓库提供 `sitecustomize.py`：
+- 仅在检测到 pytest/coverage 环境时生效（`PYTEST_CURRENT_TEST` 或 `pytest` 参数，或覆盖率相关环境变量）
+- 将覆盖率文件与临时目录固定到仓库内的 `.test_tmp/`
+- 非测试运行时保持 no-op，不影响服务启动与运行
+
 ## API 一览
 
 - `GET /health`
@@ -172,6 +179,139 @@ pytest -q tests/client_contract
 - `POST /memory/rebuild`
 
 示例请求见 `examples/requests.http`。
+
+## API Contract & Examples
+
+### 基础信息
+- Base URL（本地示例）：`http://127.0.0.1:8007`
+- Header：`X-API-Key: <key>`
+- 环境变量示例：
+  - `PLASTIC_MEMORIES_API_KEYS="devkey:userA,devkey2:userB"`
+
+### 统一响应 Envelope
+- 成功：
+  - `{"ok": true, "request_id": "<id>", "data": {...}}`
+- 失败：
+  - `{"ok": false, "request_id": "<id>", "error": {"code": "<string>", "message": "<string>", "detail": <any>}}`
+
+### 记忆模型关键字段
+- `status`: candidate | active | revoked | expired
+- `scope`: session | app | persona | global
+- `source_type`: user_explicit | model_inferred | imported | tool
+- `expires_at`: epoch seconds（int）
+- `supersedes_id`: 覆盖链指向旧 active 的 memory_id
+
+### Slots 映射规则（身份一致性）
+- slot 类型集合：`identity` / `constraints` / `values` / `preferences`
+- 这些类型写入一律 candidate，必须 confirm
+- confirm 冲突规则：
+  - 若该 type 已有 active：
+    - 未提供 `supersedes_id` → `409 conflict_requires_supersedes`
+    - `supersedes_id` 不是当前 active → `409 conflict_requires_supersedes`
+    - `supersedes_id` 合法 → 旧 active → revoked，新 → active，slots 更新
+- slots provenance 字段：
+  - `active_memory_id`：当前 active 的 memory_id
+  - `superseded`：被覆盖的 memory_id（可能为 null）
+
+### revoke vs forget（软撤销 vs 硬删除）
+- revoke：软撤销，`status=revoked`；不物理删除、不删 FTS rowid；list/recall 过滤掉
+- forget：硬删除，删除 `memory_items` 行并删除 `fts_memory` rowid；get_by_id 为 None（或 404）
+
+### goals 最小流程
+- `POST /goals/create` → `goal_id`
+- `GET /goals/list` → `items`
+- `POST /goals/update_status` → `updated`
+- `POST /goals/link` → `link_id`
+
+### 读隔离说明
+- `user_id` 由 `X-API-Key` 派生，客户端不得传 `user_id`
+- 不同 user 之间无法 list/recall/profile/slots 读取彼此数据
+- 当前实现策略：请求成功但返回空列表/空内容（无跨租户泄露）
+
+### 可复制 curl 示例
+
+**准备**
+```bash
+export API_KEY=devkey
+export BASE_URL=http://127.0.0.1:8007
+```
+
+**E1) memory/write（slot 类型写入 → candidate）**
+```bash
+curl -s $BASE_URL/memory/write \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","type":"identity","key":"id1","content":"dev","source_type":"user_explicit"}'
+```
+预期：`ok=true`，`data.memory_status="candidate"`，包含 `memory_id`
+
+**E2) memory/confirm（无冲突 → active + slot 更新）**
+```bash
+curl -s $BASE_URL/memory/confirm \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","memory_id": 1}'
+```
+预期：`ok=true`，`data.memory_status="active"`
+
+**E3) 冲突 confirm（缺 supersedes_id → 409）**
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" $BASE_URL/memory/confirm \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","memory_id": 2}'
+```
+预期：HTTP 409，`error.code="conflict_requires_supersedes"`
+
+**E4) supersedes 覆盖（带 supersedes_id）**
+```bash
+curl -s $BASE_URL/memory/confirm \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","memory_id": 2, "supersedes_id": 1}'
+```
+预期：`ok=true`；旧 active 变 revoked，新 active 生效，slots 更新
+
+**E5) revoke 与 forget**
+```bash
+curl -s $BASE_URL/memory/revoke \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","memory_id": 2}'
+curl -s $BASE_URL/memory/forget \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","type":"preferences","key":"pref-x"}'
+```
+预期：revoke 后主表仍存在但 list/recall 不返回；forget 后主表删除且不召回
+
+**E6) persona/slots/get**
+```bash
+curl -s $BASE_URL/persona/slots/get \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1"}'
+```
+预期：包含 `items`，slot 更新可见
+
+**E7) goals 流程**
+```bash
+curl -s $BASE_URL/goals/create \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","title":"Learn Rust","details":"practice"}'
+curl -s "$BASE_URL/goals/list?persona_id=p1" -H "X-API-Key: $API_KEY"
+curl -s $BASE_URL/goals/update_status \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","goal_id": 1,"status":"done"}'
+curl -s $BASE_URL/goals/link \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"persona_id":"p1","goal_id": 1,"memory_id": null,"note":"start"}'
+```
+预期：返回 `goal_id` / `items` / `updated` / `link_id`
+
+**E8) 401 / 422 错误示例**
+```bash
+curl -s $BASE_URL/memory/write -H "Content-Type: application/json" -d '{}'
+curl -s $BASE_URL/memory/write -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" -d '{"persona_id":"p1"}'
+```
+预期：`ok=false` 且包含统一 error envelope
 
 ## 召回返回格式
 
@@ -238,3 +378,4 @@ pytest -q tests/client_contract
 1. 新建实现类并遵循接口签名。
 2. 在 `ext/registry.py` 中注册并通过环境变量切换。
 3. 增加合同测试覆盖核心行为。
+Runnable HTTP examples are available in docs/requests.http (VS Code REST Client / JetBrains HTTP Client).
